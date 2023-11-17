@@ -16,8 +16,8 @@ uint8_t temp;
 uint8_t potVal;
 uint8_t gstVal = 3;
 uint32_t timerRele = 0;
-uint16_t periodWorkRele = ((1000 * 60) * 60) * 4; // 4 Години в міліснкундах
-//uint16_t periodWorkRele = 10000*15; // 4 Години в міліснкундах
+uint32_t periodWorkRele = 14400000; // 4 Години в міліснкундах
+//uint16_t periodWorkRele = 1000*15; // 15 c перевірка
 bool profilePot = 0;
 bool profileGst = 0;
 bool warningTemp = 0;
@@ -50,11 +50,13 @@ void setup() {
   butt1.setDirection(NORM_OPEN);
   tone(BUZZ_PIN, 2100, 750);
   Serial.println("Start system");
+  Serial.println( periodWorkRele );
 }
 
 void loop() {
   butt1.tick();
   btnHelper();
+  tempTick();
   if (offMode) {
     releControl(0);
     analogWrite(BLU_LED, 80);
@@ -62,7 +64,7 @@ void loop() {
     
   } else {
     digitalWrite(BLU_LED, LOW);
-    tempTick();
+    
     controlWarnibfTempTick();
     displayTick();
     potTick();
@@ -83,8 +85,8 @@ void displayTick() {
 
 void potTick() {
   if (timerPotVal.tick()) {
-    potVal = map(analogRead(A0), 0, 1023, 40, 80);
-    potVal = constrain(potVal, 40, 80);
+    potVal = map(analogRead(A0), 0, 1023, 30, 85);
+    potVal = constrain(potVal, 30, 85);
   }
 }
 
@@ -96,7 +98,8 @@ void tempTick() {
 
 void displayTemp(int temp) {
   if (!profilePot && !profileGst) {
-    disp.clear();
+//    disp.clear();
+    disp.brightness(2);
     if (temp >= 10 && temp <= 99) {
       disp.display(2, int(temp / 10));
       disp.display(3, int(temp % 10));
@@ -105,12 +108,13 @@ void displayTemp(int temp) {
       disp.display(3, int(temp));
     } 
      disp.displayByte(0, _t);
+     disp.displayByte(1, _empty);
   }
 }
 
 void displayPot() {
   if (profilePot && !profileGst) {
-    disp.clear();
+    disp.brightness(5);
     int temp = potVal;
     if (temp >= 10 && temp <= 99) {
       disp.display(2, int(temp / 10));
@@ -119,27 +123,63 @@ void displayPot() {
       disp.display(2, 0);
       disp.display(3, int(temp));
     } 
-     disp.displayByte(0, _F);
+     disp.displayByte(0, _t);
+     disp.displayByte(1, _r);
   }
 }
 
 void displayGst() {
+  
   if (!profilePot && profileGst) {
-    disp.clear();
     int temp = potVal;
-    temp = map(temp, 40, 80, 2, 7);
+    disp.brightness(5);
+    temp = map(temp, 30, 85, 1, 10);
     if (temp >= 0 && temp <= 9) {
       disp.display(2, 0);
       disp.display(3, int(temp));
     } 
-    disp.displayByte(0, _P);
+    disp.displayByte(0, _H);
+    disp.displayByte(1, _t);
   }
 }
 
+byte getByteToDigit(byte d) {
+  switch(d) {
+    case 0:
+      return _0;
+    case 1:
+      return _1;
+    case 2:
+      return _2;
+    case 3:
+      return _3;
+    case 4:
+      return _4;
+    case 5:
+      return _5;
+    case 6:
+      return _6;
+    case 7:
+      return _7;
+    case 8:
+      return _8;
+    case 9:
+      return _9;
+  }
+  return _empty;
+}
+
 void displayOff() {
-    disp.displayByte(0, _0);
-    disp.displayByte(1, _F);
-    disp.displayByte(2, _F);
+    disp.brightness(1);
+    byte welcome_banner[] = {_O, _F, _empty, _empty};
+    if (temp >= 10 && temp <= 99) {
+    welcome_banner[2] = getByteToDigit(int(temp / 10));
+    welcome_banner[3] = getByteToDigit(int(temp % 10));
+  } else if (temp >= 0 && temp <= 9) {
+    welcome_banner[2] = getByteToDigit(0);
+    welcome_banner[3] = getByteToDigit(int(temp));
+  } 
+  disp.displayByte(welcome_banner);
 }
 
 void btnHelper() {
