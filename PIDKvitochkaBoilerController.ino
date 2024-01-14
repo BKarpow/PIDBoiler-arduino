@@ -28,6 +28,9 @@ bool warningTemp = 0;
 bool lockMode = 1;
 bool startPeriodTimerRele = 0;
 bool offMode = 0;
+int countRunRele = 0;
+bool countWrite = 0;
+bool countDisplay = 0;
 
 TimerMs timerNTC(1000, 1, 0);
 TimerMs timerPOT(300, 1, 0);
@@ -76,6 +79,7 @@ void loop() {
   lockTick();
   bHelper();
   tempTick();
+  countReleTick();
   if (offMode) {
     releControl(0);
     displayOff();
@@ -138,17 +142,22 @@ void displayTemp(int temp) {
   if (!profilePot && !profileGst) {
 //    disp.clear();
 //    disp.brightness(2);
-    if (temp != 255) {
+    if (!countDisplay) {
       disp.displayInt(temp);
     } else {
-      byte troll[4] = {_E, _r, _r, _t};
-      disp.scrollByte(troll, 100);
+      disp.displayInt(countRunRele);
+//      if (eb.click()) {
+//        countDisplay = 0;
+//      }
     }
     
   }
 }
 
 void gstTick() {
+  if (eb.click() && countDisplay) {
+        countDisplay = 0;
+      }
   if (profileGst) {
     
     if (eb.left() && periodWorkReleH >= 1) {
@@ -262,6 +271,11 @@ void bHelper() {
     profileGst = 1;
     profilePot = 0;
   }
+  if (eb.hasClicks(4) && !lockMode && !btnState) {
+    countDisplay = 1;
+    profileGst = 0;
+    profilePot = 0;
+  }
   if (lockMode && btnState) {
     if (eb.hasClicks(3)) {
       lockMode = 0;
@@ -293,9 +307,14 @@ void pidReleControl() {
   gst = 1;
   if (temp >= (maxTemp + gst)) {
     releControl(0);
+    countWrite = 1;
   }
   if ( temp <= (maxTemp - gst) ) {
     releControl(1);
+    if (countWrite) {
+      countRunRele++;
+      countWrite = 0;
+    }
   }
 }
 
@@ -336,4 +355,10 @@ int getTemoDs18b20() {
   if (sensor.readTemp()) tempDs = int(sensor.getTemp());
   else tempDs = -273;
   return tempDs;
+}
+
+void countReleTick() {
+  if (countRunRele > 9999) {
+    countRunRele = 0;
+  }
 }
