@@ -1,78 +1,104 @@
 #include <GyverTM1637.h>
-#include <AnalogKey.h>
-#include <GyverButton.h>
-#include <GyverNTC.h>
 #include <TimerMs.h>
 #include <EEPROM.h>
+#include <DS_raw.h>
+#include <microDS18B20.h>
+#include <microOneWire.h>
+#include <EncButton.h>
 
+EncButton eb(12, 10, 9);
+MicroDS18B20<5> sensor;
 #define BUZZ_PIN 2
-#define BTN_PIN 3
-#define RELE_PIN 4
-#define CLK 5 //Display
-#define DIO 6 //Display
+#define BTN_PIN 4
+#define RELE_PIN 2
+#define CLK 7 //Display
+#define DIO 8 //Display
 #define BLU_LED 9 // Blu led intocator
 
 uint8_t temp;
-uint8_t potVal;
+uint8_t potVal = 40;
 uint8_t gstVal = 3;
 uint32_t timerRele = 0;
 uint32_t periodWorkRele = 14400000; // 4 Години в міліснкундах
+int periodWorkReleH = (periodWorkRele/1000/60/60);
 //uint16_t periodWorkRele = 1000*15; // 15 c перевірка
 bool profilePot = 0;
 bool profileGst = 0;
 bool warningTemp = 0;
+bool lockMode = 1;
 bool startPeriodTimerRele = 0;
 bool offMode = 0;
 
 TimerMs timerNTC(1000, 1, 0);
+TimerMs timerPOT(300, 1, 0);
 TimerMs timerControlWarningTemp(2000, 1, 0);
 TimerMs timerPID(750, 1, 0);
 TimerMs timerDisplayTemp(1100, 1, 0);
-TimerMs timerPotVal(250, 1, 0);
-TimerMs timerHold(3000, 1, 0);
-GButton butt1(BTN_PIN);
-GyverNTC therm(1, 10000, 3450);
+
+
 GyverTM1637 disp(CLK, DIO);
 
 
 
 void setup() {
   Serial.begin(9600);
+
   disp.clear();
   disp.brightness(7);  // яркость, 0 - 7 (минимум - максимум)
   pinMode(BLU_LED, OUTPUT);
   pinMode(RELE_PIN, OUTPUT);
   digitalWrite(RELE_PIN, HIGH);
-  butt1.setDebounce(50);        // настройка антидребезга (по умолчанию 80 мс)
-  butt1.setTimeout(1000);        // настройка таймаута на удержание (по умолчанию 500 мс)
-  butt1.setClickTimeout(600);   // настройка таймаута между кликами (по умолчанию 300 мс)
-  butt1.setType(HIGH_PULL);
-  butt1.setDirection(NORM_OPEN);
-  tone(BUZZ_PIN, 2100, 750);
+  eb.setBtnLevel(LOW);
+    eb.setClickTimeout(500);
+    eb.setDebTimeout(50);
+    eb.setHoldTimeout(600);
+    eb.setStepTimeout(200);
+
+    eb.setEncReverse(1);
+    eb.setEncType(EB_STEP4_LOW);
+    eb.setFastTimeout(30);
+
+    // сбросить счётчик энкодера
+    eb.counter = 0;
+  
+  EEPROM.get(0, potVal);
+  EEPROM.get(1, periodWorkReleH);
+  periodWorkRele = (periodWorkReleH*1000*60*60);
+  if (periodWorkRele == 0) {
+    periodWorkRele = 1000*60*60; // 1 Година
+  }
   Serial.println("Start system");
   Serial.println( periodWorkRele );
 }
 
 void loop() {
-  butt1.tick();
-  btnHelper();
+  eb.tick();
+  lockTick();
+  bHelper();
   tempTick();
   if (offMode) {
     releControl(0);
-    analogWrite(BLU_LED, 80);
     displayOff();
-    
   } else {
-    digitalWrite(BLU_LED, LOW);
+    
     
     controlWarnibfTempTick();
     displayTick();
     potTick();
+    gstTick();
     pidTick();
     periodWorkReleTick();
   }
   
   
+}
+
+void lockTick() {
+  if (lockMode) {
+    disp.brightness(1);
+  } else {
+    disp.brightness(6);
+  }
 }
 
 void displayTick() {
@@ -84,37 +110,64 @@ void displayTick() {
 }
 
 void potTick() {
-  if (timerPotVal.tick()) {
-    potVal = map(analogRead(A0), 0, 1023, 30, 85);
-    potVal = constrain(potVal, 30, 85);
-  }
+    byte inc = 1;
+   if (eb.fast()) {
+    inc =  2 ;
+   }
+   if (eb.right() && potVal <= 95) {
+      potVal = potVal + inc;
+   }
+   if (eb.left() && potVal >= 5){
+    potVal = potVal - inc;
+   }
+   if (eb.click()) {
+    EEPROM.put(0, potVal);
+    profilePot = 0;
+    profileGst = 0;
+   }
 }
 
 void tempTick() {
   if (timerNTC.tick()) {
-    temp = therm.getTempAverage();
+    temp = getTemoDs18b20();
+//    Serial.println(temp);
   }
 }
 
 void displayTemp(int temp) {
   if (!profilePot && !profileGst) {
 //    disp.clear();
-    disp.brightness(2);
-    if (temp >= 10 && temp <= 99) {
-      disp.display(2, int(temp / 10));
-      disp.display(3, int(temp % 10));
-    } else if (temp >= 0 && temp <= 9) {
-      disp.display(2, 0);
-      disp.display(3, int(temp));
-    } 
-     disp.displayByte(0, _t);
-     disp.displayByte(1, _empty);
+//    disp.brightness(2);
+    if (temp != 255) {
+      disp.displayInt(temp);
+    } else {
+      byte troll[4] = {_E, _r, _r, _t};
+      disp.scrollByte(troll, 100);
+    }
+    
+  }
+}
+
+void gstTick() {
+  if (profileGst) {
+    
+    if (eb.left() && periodWorkReleH >= 1) {
+      periodWorkReleH = periodWorkReleH - 1;
+    }
+    if (eb.right() && periodWorkReleH <= 9) {
+      periodWorkReleH = periodWorkReleH + 1;
+    }
+    if (eb.click()) {
+      EEPROM.put(1, periodWorkReleH);
+      profileGst = 0;
+      profilePot = 0;
+    }
   }
 }
 
 void displayPot() {
   if (profilePot && !profileGst) {
-    disp.brightness(5);
+//    disp.brightness(5);
     int temp = potVal;
     if (temp >= 10 && temp <= 99) {
       disp.display(2, int(temp / 10));
@@ -131,15 +184,20 @@ void displayPot() {
 void displayGst() {
   
   if (!profilePot && profileGst) {
-    int temp = potVal;
-    disp.brightness(5);
-    temp = map(temp, 30, 85, 1, 10);
-    if (temp >= 0 && temp <= 9) {
+    
+//    Serial.print("ReleTimeout GST:");
+//    Serial.println(periodWorkReleH);
+//    Serial.print("ReleTimeout:");
+//    Serial.println(periodWorkRele);
+//    disp.brightness(5);
+//    temp = map(temp, 30, 85, 1, 10);
+    if (periodWorkReleH >= 0 && periodWorkReleH <= 9) {
       disp.display(2, 0);
-      disp.display(3, int(temp));
+      disp.display(3, int(periodWorkReleH));
     } 
     disp.displayByte(0, _H);
     disp.displayByte(1, _t);
+    
   }
 }
 
@@ -170,7 +228,7 @@ byte getByteToDigit(byte d) {
 }
 
 void displayOff() {
-    disp.brightness(1);
+//    disp.brightness(1);
     byte welcome_banner[] = {_O, _F, _empty, _empty};
     if (temp >= 10 && temp <= 99) {
     welcome_banner[2] = getByteToDigit(int(temp / 10));
@@ -182,36 +240,41 @@ void displayOff() {
   disp.displayByte(welcome_banner);
 }
 
-void btnHelper() {
-  if (butt1.isClick() ) {
-    piBuzz();
-    startPeriodTimerRele = 0;
+void bHelper() {
+  uint8_t btnState = (bool)digitalRead(BTN_PIN);
+//  profilePot = (bool)digitalRead(BTN_PIN);
+//  if (profilePot ) {
+//    EEPROM.get(0, potVal);
+//  }
+  if (offMode && eb.click()) {
     offMode = 0;
-    if (profilePot) {
-      EEPROM.put(0, potVal);
-      profilePot = 0;
-    }
-    if (profileGst) {
-      EEPROM.put(1, gstVal);
-      profileGst = 0;
-    }
   }
-
-  if (butt1.isDouble()) {
-    profilePot = 1;
+   if (eb.hold()) {
+    offMode = 1;
+   }
+  if (eb.hasClicks(2) && !lockMode) {
+    EEPROM.get(0, potVal);
     profileGst = 0;
+    profilePot = 1;
+    
   }
-  if (butt1.isTriple()) {
-    profilePot = 0;
+  if (eb.hasClicks(3) && !lockMode) {
     profileGst = 1;
+    profilePot = 0;
   }
-
-  if (timerHold.tick()) {
-    if (butt1.isHold()) {
-      offMode = 1;
-      
+  if (lockMode && btnState) {
+    if (eb.hasClicks(3)) {
+      lockMode = 0;
+      Serial.println("Unlock!");
     }
   }
+  if (!lockMode && btnState && eb.hasClicks(4)) {
+    lockMode = 1;
+    Serial.println("Lock!");
+  }
+  
+  
+  
 }
 
 void piBuzz() {
@@ -227,8 +290,8 @@ void pidTick() {
 void pidReleControl() {
   byte maxTemp, gst;
   EEPROM.get(0, maxTemp);
-  EEPROM.get(1, gst);
-  if (temp >= maxTemp) {
+  gst = 1;
+  if (temp >= (maxTemp + gst)) {
     releControl(0);
   }
   if ( temp <= (maxTemp - gst) ) {
@@ -256,7 +319,7 @@ void releControl(bool status) {
 
 void controlWarnibfTempTick() {
   if (timerControlWarningTemp.tick()) {
-    warningTemp = (temp > 80 || temp <= -5) ;
+    warningTemp = (temp > 90 || temp <= -10) ;
   }
 }
 
@@ -264,4 +327,13 @@ void periodWorkReleTick() {
   if (startPeriodTimerRele && millis() - timerRele >= periodWorkRele) {
     offMode = 1;
   }
+}
+
+
+int getTemoDs18b20() {
+  uint16_t tempDs = 0;
+  sensor.requestTemp();
+  if (sensor.readTemp()) tempDs = int(sensor.getTemp());
+  else tempDs = -273;
+  return tempDs;
 }
